@@ -1,0 +1,157 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+Vagrant.configure("2") do |config|
+    # Define the number of compute nodes
+    num_nodes = 2  # Adjust this number as needed
+  
+    # Base VM settings
+    config.vm.box = "ubuntu/jammy64"
+  
+    # Configure the SLURM controller node
+    config.vm.define "controller" do |controller|
+      controller.vm.hostname = "controller"
+      controller.vm.network "private_network", ip: "192.168.56.10"
+  
+      controller.vm.provider "virtualbox" do |vb|
+        vb.memory = "2048"
+        vb.cpus = 2
+      end
+  
+      controller.vm.provision "shell", inline: <<-SHELL
+
+        # Create slurm user
+
+
+
+        # Update and install dependencies
+        apt-get update
+        apt-get install -y build-essential munge munge-tools libmunge-dev
+        apt-get install -y slurm-wlm slurm-wlm-basic-plugins slurmctld
+  
+        # Configure Munge for authentication
+        /usr/sbin/create-munge-key -f
+        chown -R munge: /etc/munge
+        chmod 0700 /etc/munge
+        systemctl enable munge
+        systemctl start munge
+  
+        mkdir -p /etc/slurm-llnl/
+        touch /etc/slurm-llnl/slurm.conf
+        chown -R slurm: /etc/slurm-llnl/
+        chown -R slurm: /etc/slurm-llnl/slurm.conf
+        
+
+                # Ensure slurm.conf is owned by slurm user
+        sudo chown slurm: /etc/slurm/slurm.conf
+        sudo chmod 644 /etc/slurm/slurm.conf
+
+        # Verify StateSaveLocation directory
+        sudo mkdir -p /var/spool/slurmctld
+        sudo chown slurm: /var/spool/slurmctld
+        sudo chmod 755 /var/spool/slurmctld
+
+        # Verify SlurmdSpoolDir directory
+        sudo mkdir -p /var/spool/slurmd
+        sudo chown slurm: /var/spool/slurmd
+        sudo chmod 755 /var/spool/slurmd
+
+        # Verify log directory
+        sudo mkdir -p /var/log/slurm
+        sudo chown slurm: /var/log/slurm
+        sudo chmod 755 /var/log/slurm
+
+
+        # Generate slurm.conf
+        cat <<EOF > /etc/slurm-llnl/slurm.conf
+        ClusterName=cluster
+        ControlMachine=controller
+        SlurmUser=slurm
+        AuthType=auth/munge
+        StateSaveLocation=/var/spool/slurmctld
+        SlurmdSpoolDir=/var/spool/slurmd
+        SwitchType=switch/none
+        MpiDefault=none
+        SlurmctldPort=6817
+        SlurmdPort=6818
+        ProctrackType=proctrack/pgid
+        ReturnToService=2
+        SlurmctldTimeout=120
+        SlurmdTimeout=300
+        SchedulerType=sched/backfill
+        SelectType=select/cons_res
+        SelectTypeParameters=CR_Core
+        # Node definitions
+        NodeName=controller,compute[1-#{num_nodes}] CPUs=1 State=UNKNOWN
+        PartitionName=debug Nodes=ALL Default=YES MaxTime=INFINITE State=UP
+        EOF
+  
+        # Setup directories and permissions
+        mkdir -p /var/spool/slurmctld /var/spool/slurmd /var/log/slurm
+        chown -R slurm: /var/spool/slurmctld /var/spool/slurmd /var/log/slurm
+        chmod 755 /var/spool/slurmctld /var/spool/slurmd
+  
+        # Start SLURM controller daemon
+        systemctl enable slurmctld
+        systemctl start slurmctld
+      SHELL
+    end
+  
+    # Configure compute nodes
+    (1..num_nodes).each do |i|
+      config.vm.define "compute#{i}" do |compute|
+        compute.vm.hostname = "compute#{i}"
+        compute.vm.network "private_network", ip: "192.168.56.1#{i}"
+  
+        compute.vm.provider "virtualbox" do |vb|
+          vb.memory = "1024"
+          vb.cpus = 1
+        end
+  
+        compute.vm.provision "shell", inline: <<-SHELL
+          # Update and install dependencies
+          apt-get update
+          apt-get install -y build-essential munge munge-tools libmunge-dev
+          apt-get install -y slurmd
+  
+          # Copy munge key and slurm.conf from controller (we'll use synced folders)
+        SHELL
+  
+        # Share the /vagrant directory
+        compute.vm.synced_folder ".", "/vagrant", disabled: true
+        compute.vm.provision "shell", inline: <<-SHELL
+          # Copy munge key and slurm.conf from shared folder
+          cp /vagrant/munge.key /etc/munge/munge.key
+          cp /vagrant/slurm.conf /etc/slurm-llnl/slurm.conf
+  
+          # Set permissions
+          chown -R munge: /etc/munge
+          chmod 0700 /etc/munge
+          chown slurm: /etc/slurm-llnl/slurm.conf
+  
+          # Start Munge
+          systemctl enable munge
+          systemctl start munge
+  
+          # Setup directories and permissions
+          mkdir -p /var/spool/slurmd /var/log/slurm
+          chown -R slurm: /var/spool/slurmd /var/log/slurm
+          chmod 755 /var/spool/slurmd
+  
+          # Start SLURM daemon
+          systemctl enable slurmd
+          systemctl start slurmd
+        SHELL
+      end
+    end
+  
+    # Share munge.key and slurm.conf from controller to host machine
+    config.vm.define "controller" do |controller|
+      controller.vm.synced_folder ".", "/vagrant"
+      controller.vm.provision "shell", inline: <<-SHELL
+        cp /etc/munge/munge.key /vagrant/
+        cp /etc/slurm-llnl/slurm.conf /vagrant/
+      SHELL
+    end
+end
+  
