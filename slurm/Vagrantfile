@@ -1,67 +1,48 @@
 # -*- mode: ruby -*-
 # vi: set ft=ruby :
 
-Vagrant.configure("2") do |config|
-    # Define the number of compute nodes
-    num_nodes = 2  # Adjust this number as needed
-  
+# Define a method to load variables from a .sh file
+def load_config(file)
+  config = {}
+  File.readlines(file).each do |line|
+    # Match variable assignments like VAR="value" or VAR=("value1" "value2")
+    if line =~ /^(\w+)=["(]*(.*?)["\)]*$/
+      key = $1
+      value = $2
+      
+      # Handle arrays by checking for spaces (assumes space-separated array items)
+      if value.include?(" ")
+        config[key] = value.split(" ")
+      else
+        config[key] = value
+      end
+    end
+  end
+  config
+end
+
+# Load the configuration from the .sh file
+config = load_config('config.sh')
+
+Vagrant.configure("2") do |config|  
     # Base VM settings
     config.vm.box = "ubuntu/jammy64"
-    controller_name = "sl1"
+    controller_name = config['CONTROL_NODE']
     # Configure the SLURM controller node
     config.vm.define controller_name do |controller|
       controller.vm.hostname = controller_name
-      controller.vm.network "private_network", ip: "192.168.56.10"
+      controller.vm.network "private_network", ip: config['CONTROL_NODE_IP']
   
       controller.vm.provider "virtualbox" do |vb|
         vb.name = controller_name # This sets the name displayed in VirtualBox
-        vb.memory = "10240"
-        vb.cpus = 10
+        vb.memory = config['CONTROL_NODE_MEMORY']
+        vb.cpus = config['CONTROL_NODE_CPUS']
       end
-      config.vm.provision "file", source: "slurm.conf", destination: "/tmp/slurm.conf"
-
-      controller.vm.provision "shell", inline: <<-SHELL
-
-        # Create slurm user
-        # Update and install dependencies
-        apt-get update
-        apt-get install -y build-essential munge libmunge-dev slurm-wlm slurm-wlm-basic-plugins slurmctld
-
-        # Configure Munge for authentication
-        dd if=/dev/urandom bs=1 count=1024 > /etc/munge/munge.key
-        chown -R munge: /etc/munge
-        chmod 0700 /etc/munge
-        systemctl enable munge
-        systemctl start munge
-
-
-        # Setup directories and permissions
-        mkdir -p /var/spool/slurmctld /var/spool/slurmd /var/log/slurm /etc/slurm-llnl/
-        chown -R slurm: /var/spool/slurmctld /var/spool/slurmd /var/log/slurm /etc/slurm-llnl/
-        chmod 755 /var/spool/slurmctld /var/spool/slurmd /var/log/slurm /etc/slurm-llnl/
-
-        sudo cp /vagrant/slurm.conf /etc/slurm-llnl/slurm.conf
-        sudo chown slurm:slurm /etc/slurm-llnl/slurm.conf
-        sudo cp /vagrant/slurm.conf /etc/slurm/slurm.conf
-        sudo chown slurm:slurm /etc/slurm/slurm.conf
-
-    
-  
-        # Ensure slurm.conf is owned by slurm user
-        chown slurm: /etc/slurm/slurm.conf
-        chmod 644 /etc/slurm/slurm.conf
-  
-        # Start SLURM controller daemon
-        systemctl enable slurmctld
-        systemctl start slurmctld
-
-        echo "Overwriting /etc/hosts with custom hosts file"
-        sudo cp /vagrant/hosts /etc/hosts
-
-      SHELL
+      
+      controller.vm.provision "file", source: "./slurm_config", destination: "/home/vagrant/slurm_config"
+      controller.vm.provision "shell", path: "./slurm_creation.sh"
 
     end
-  
 end
   
 
