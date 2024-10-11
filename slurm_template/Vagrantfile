@@ -1,0 +1,53 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+# Define a method to load variables from a .sh file
+def load_config(file)
+  config = {}
+  File.readlines(file).each do |line|
+    # Match variable assignments like VAR="value" or VAR=("value1" "value2")
+    if line =~ /^(\w+)=["(]*(.*?)["\)]*$/
+      key = $1
+      value = $2
+      
+      # Handle arrays by checking for spaces (assumes space-separated array items)
+      if value.include?(" ")
+        config[key] = value.split(" ")
+      else
+        config[key] = value
+      end
+    end
+  end
+  config
+end
+
+# Load the configuration from the .sh file
+slurm_config = load_config('./slurm_config/config.sh')
+
+# Debugging output
+puts "Loaded configuration: #{slurm_config}"
+
+Vagrant.configure("2") do |config|  
+    # Base VM settings
+    config.vm.box = "ubuntu/jammy64"
+    controller_name = slurm_config['CONTROL_NODE']
+    # Configure the SLURM controller node
+    config.vm.define controller_name do |controller|
+      controller.vm.hostname = controller_name
+      controller.vm.network "private_network", ip: slurm_config['CONTROL_NODE_IP']
+  
+      controller.vm.provider "virtualbox" do |vb|
+        vb.name = controller_name # This sets the name displayed in VirtualBox
+        vb.memory = slurm_config['CONTROL_NODE_MEMORY']
+        vb.cpus = slurm_config['CONTROL_NODE_CPUS']
+      end
+      
+      controller.vm.provision "file", source: ".", destination: "/home/vagrant/"
+      controller.vm.provision "shell", path: "./slurm_config/slurm_creation.sh"
+
+    end
+end
+  
+
+
+
